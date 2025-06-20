@@ -332,7 +332,7 @@ func Test_PatchAnnotations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := dev.PatchAnnotations(&test.args.annoinput, test.args.pd)
+			result := dev.PatchAnnotations(&corev1.Pod{}, &test.args.annoinput, test.args.pd)
 
 			assert.Equal(t, len(test.want), len(result), "Expected length of result to match want")
 			for k, v := range test.want {
@@ -342,7 +342,7 @@ func Test_PatchAnnotations(t *testing.T) {
 	}
 }
 
-func Test_CheckType(t *testing.T) {
+func Test_checkType(t *testing.T) {
 	dev := Devices{
 		config: VNPUConfig{
 			CommonWord: "Ascend910A",
@@ -390,13 +390,13 @@ func Test_CheckType(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, result, _ := dev.CheckType(test.args.annos, test.args.d, test.args.n)
+			_, result, _ := dev.checkType(test.args.annos, test.args.d, test.args.n)
 			assert.Equal(t, result, test.want)
 		})
 	}
 }
 
-func Test_CheckUUID(t *testing.T) {
+func Test_checkUUID(t *testing.T) {
 	dev := Devices{
 		useUUIDAnno:   "hami.io/use-Ascend910A-uuid",
 		noUseUUIDAnno: "hami.io/no-use-Ascend910A-uuid",
@@ -483,7 +483,7 @@ func Test_CheckUUID(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := dev.CheckUUID(test.args.annos, test.args.d)
+			result := dev.checkUUID(test.args.annos, test.args.d)
 			assert.Equal(t, result, test.want)
 		})
 	}

@@ -145,7 +145,7 @@ func TestPatchAnnotations(t *testing.T) {
 			}
 
 			dev := &EnflameDevices{}
-			got := dev.PatchAnnotations(&annoInputCopy, tt.podDevices)
+			got := dev.PatchAnnotations(&corev1.Pod{}, &annoInputCopy, tt.podDevices)
 
 			if len(got) != len(tt.expected) {
 				t.Errorf("PatchAnnotations() got %d annotations, expected %d", len(got), len(tt.expected))
@@ -217,7 +217,7 @@ func Test_MutateAdmission(t *testing.T) {
 	}
 }
 
-func Test_CheckType(t *testing.T) {
+func Test_checkType(t *testing.T) {
 	tests := []struct {
 		name string
 		args struct {
@@ -267,7 +267,7 @@ func Test_CheckType(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dev := EnflameDevices{}
-			result1, result2, result3 := dev.CheckType(test.args.annos, test.args.d, test.args.n)
+			result1, result2, result3 := dev.checkType(test.args.annos, test.args.d, test.args.n)
 			assert.Equal(t, result1, test.want1)
 			assert.Equal(t, result2, test.want2)
 			assert.Equal(t, result3, test.want3)
@@ -275,7 +275,7 @@ func Test_CheckType(t *testing.T) {
 	}
 }
 
-func Test_CheckUUID(t *testing.T) {
+func Test_checkUUID(t *testing.T) {
 	tests := []struct {
 		name string
 		args struct {
@@ -361,7 +361,7 @@ func Test_CheckUUID(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dev := EnflameDevices{}
-			result := dev.CheckUUID(test.args.annos, test.args.d)
+			result := dev.checkUUID(test.args.annos, test.args.d)
 			assert.Equal(t, result, test.want)
 		})
 	}

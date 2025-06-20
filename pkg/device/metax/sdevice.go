@@ -19,11 +19,14 @@ package metax
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Project-HAMi/HAMi/pkg/device/common"
 	"github.com/Project-HAMi/HAMi/pkg/util"
 	"github.com/Project-HAMi/HAMi/pkg/util/nodelock"
 
@@ -45,6 +48,7 @@ var (
 )
 
 type MetaxSDevices struct {
+	jqCache *JitteryQosCache
 }
 
 func InitMetaxSDevice(config MetaxConfig) *MetaxSDevices {
@@ -55,7 +59,9 @@ func InitMetaxSDevice(config MetaxConfig) *MetaxSDevices {
 	util.InRequestDevices[MetaxSGPUDevice] = "hami.io/metax-sgpu-devices-to-allocate"
 	util.SupportDevices[MetaxSGPUDevice] = "hami.io/metax-sgpu-devices-allocated"
 
-	return &MetaxSDevices{}
+	return &MetaxSDevices{
+		jqCache: NewJitteryQosCache(),
+	}
 }
 
 func (sdev *MetaxSDevices) CommonWord() string {
@@ -64,32 +70,42 @@ func (sdev *MetaxSDevices) CommonWord() string {
 
 func (sdev *MetaxSDevices) MutateAdmission(ctr *corev1.Container, p *corev1.Pod) (bool, error) {
 	_, ok := ctr.Resources.Limits[corev1.ResourceName(MetaxResourceNameVCount)]
-	return ok, nil
+	if !ok {
+		return false, nil
+	}
+
+	qos, ok := p.Annotations[MetaxSGPUQosPolicy]
+	if !ok {
+		if p.Annotations == nil {
+			p.Annotations = make(map[string]string)
+		}
+
+		p.Annotations[MetaxSGPUQosPolicy] = BestEffort
+		return true, nil
+	}
+
+	if qos == BestEffort ||
+		qos == FixedShare ||
+		qos == BurstShare {
+		return true, nil
+	} else {
+		return true, fmt.Errorf("%s must be set one of [%s, %s, %s]",
+			MetaxSGPUQosPolicy, BestEffort, FixedShare, BurstShare)
+	}
 }
 
 func (sdev *MetaxSDevices) GetNodeDevices(n corev1.Node) ([]*util.DeviceInfo, error) {
-	anno, ok := n.Annotations[MetaxSDeviceAnno]
-	if !ok {
-		return []*util.DeviceInfo{}, errors.New("annos not found " + MetaxSDeviceAnno)
-	}
-
-	metaxSDevices := []*MetaxSDeviceInfo{}
-	err := json.Unmarshal([]byte(anno), &metaxSDevices)
+	metaxSDevices, err := sdev.getMetaxSDevices(n)
 	if err != nil {
-		klog.ErrorS(err, "failed to unmarshal metax sdevices", "node", n.Name, "sdevice annotation", anno)
 		return []*util.DeviceInfo{}, err
 	}
 
-	if len(metaxSDevices) == 0 {
-		klog.InfoS("no metax sgpu device found", "node", n.Name, "sdevice annotation", anno)
-		return []*util.DeviceInfo{}, errors.New("no sdevice found on node")
-	}
+	sdev.jqCache.Sync(metaxSDevices)
 
-	klog.V(5).Infof("node[%s] metax sdevice information: %s", n.Name, NodeMetaxSDeviceInfo(metaxSDevices).String())
 	return convertMetaxSDeviceToHAMIDevice(metaxSDevices), nil
 }
 
-func (sdev *MetaxSDevices) PatchAnnotations(annoinput *map[string]string, pd util.PodDevices) map[string]string {
+func (sdev *MetaxSDevices) PatchAnnotations(pod *corev1.Pod, annoinput *map[string]string, pd util.PodDevices) map[string]string {
 	devlist, ok := pd[MetaxSGPUDevice]
 	if ok && len(devlist) > 0 {
 		deviceStr := util.EncodePodSingleDevice(devlist)
@@ -111,6 +127,8 @@ func (sdev *MetaxSDevices) PatchAnnotations(annoinput *map[string]string, pd uti
 
 		(*annoinput)[MetaxAllocatedSDevices] = string(byte)
 		(*annoinput)[MetaxPredicateTime] = strconv.FormatInt(time.Now().UnixNano(), 10)
+
+		sdev.addJitteryQos(pod.Annotations[MetaxSGPUQosPolicy], devlist)
 	}
 
 	return *annoinput
@@ -154,15 +172,15 @@ func (sdev *MetaxSDevices) NodeCleanUp(nn string) error {
 	return nil
 }
 
-func (sdev *MetaxSDevices) CheckType(annos map[string]string, d util.DeviceUsage, n util.ContainerDeviceRequest) (bool, bool, bool) {
+func (sdev *MetaxSDevices) checkType(annos map[string]string, d util.DeviceUsage, n util.ContainerDeviceRequest) (bool, bool, bool) {
 	if strings.Compare(n.Type, MetaxSGPUDevice) == 0 {
-		return true, true, false
+		return true, sdev.checkDeviceQos(annos[MetaxSGPUQosPolicy], d, n), false
 	}
 
 	return false, false, false
 }
 
-func (sdev *MetaxSDevices) CheckUUID(annos map[string]string, d util.DeviceUsage) bool {
+func (sdev *MetaxSDevices) checkUUID(annos map[string]string, d util.DeviceUsage) bool {
 	useUUIDAnno, ok := annos[MetaxUseUUID]
 	if ok {
 		klog.V(5).Infof("check UUID for metax, useUUID[%s], deviceID[%s]", useUUIDAnno, d.ID)
@@ -191,7 +209,7 @@ func (sdev *MetaxSDevices) CheckUUID(annos map[string]string, d util.DeviceUsage
 }
 
 func (sdev *MetaxSDevices) CheckHealth(devType string, n *corev1.Node) (bool, bool) {
-	devices, _ := sdev.GetNodeDevices(*n)
+	devices, _ := sdev.getMetaxSDevices(*n)
 
 	return len(devices) > 0, true
 }
@@ -250,18 +268,197 @@ func (sdev *MetaxSDevices) GenerateResourceRequests(ctr *corev1.Container) util.
 	}
 }
 
-func (sdev *MetaxSDevices) CustomFilterRule(allocated *util.PodDevices, request util.ContainerDeviceRequest, toAllocate util.ContainerDevices, device *util.DeviceUsage) bool {
-	return true
-}
-
-func (sdev *MetaxSDevices) ScoreNode(node *corev1.Node, podDevices util.PodSingleDevice, policy string) float32 {
+func (sdev *MetaxSDevices) ScoreNode(node *corev1.Node, podDevices util.PodSingleDevice, previous []*util.DeviceUsage, policy string) float32 {
 	return 0
 }
 
-func (sdev *MetaxSDevices) AddResourceUsage(n *util.DeviceUsage, ctr *util.ContainerDevice) error {
+func (sdev *MetaxSDevices) AddResourceUsage(pod *corev1.Pod, n *util.DeviceUsage, ctr *util.ContainerDevice) error {
 	n.Used++
 	n.Usedcores += ctr.Usedcores
 	n.Usedmem += ctr.Usedmem
 
+	if value, ok := n.CustomInfo["QosPolicy"]; ok {
+		if qos, ok := value.(string); ok {
+			expectedQos := pod.Annotations[MetaxSGPUQosPolicy]
+			if ctr.Usedcores == 100 {
+				expectedQos = ""
+			}
+
+			n.CustomInfo["QosPolicy"] = expectedQos
+			klog.Infof("device[%s] temp changed qos [%s] to [%s]", n.ID, qos, expectedQos)
+		}
+	}
+
 	return nil
+}
+
+func (mats *MetaxSDevices) Fit(devices []*util.DeviceUsage, request util.ContainerDeviceRequest, annos map[string]string, pod *corev1.Pod, allocated *util.PodDevices) (bool, map[string]util.ContainerDevices, string) {
+	k := request
+	originReq := k.Nums
+	prevnuma := -1
+	klog.InfoS("Allocating device for container request", "pod", klog.KObj(pod), "card request", k)
+	var tmpDevs map[string]util.ContainerDevices
+	tmpDevs = make(map[string]util.ContainerDevices)
+	reason := make(map[string]int)
+	for i := len(devices) - 1; i >= 0; i-- {
+		dev := devices[i]
+		klog.V(4).InfoS("scoring pod", "pod", klog.KObj(pod), "device", dev.ID, "Memreq", k.Memreq, "MemPercentagereq", k.MemPercentagereq, "Coresreq", k.Coresreq, "Nums", k.Nums, "device index", i)
+
+		_, found, numa := mats.checkType(annos, *dev, k)
+		if !found {
+			reason[common.CardTypeMismatch]++
+			klog.V(5).InfoS(common.CardTypeMismatch, "pod", klog.KObj(pod), "device", dev.ID, dev.Type, k.Type)
+			continue
+		}
+		if numa && prevnuma != dev.Numa {
+			if k.Nums != originReq {
+				reason[common.NumaNotFit] += len(tmpDevs)
+				klog.V(5).InfoS(common.NumaNotFit, "pod", klog.KObj(pod), "device", dev.ID, "k.nums", k.Nums, "numa", numa, "prevnuma", prevnuma, "device numa", dev.Numa)
+			}
+			k.Nums = originReq
+			prevnuma = dev.Numa
+			tmpDevs = make(map[string]util.ContainerDevices)
+		}
+		if !mats.checkUUID(annos, *dev) {
+			reason[common.CardUUIDMismatch]++
+			klog.V(5).InfoS(common.CardUUIDMismatch, "pod", klog.KObj(pod), "device", dev.ID, "current device info is:", *dev)
+			continue
+		}
+
+		memreq := int32(0)
+		if dev.Count <= dev.Used {
+			reason[common.CardTimeSlicingExhausted]++
+			klog.V(5).InfoS(common.CardTimeSlicingExhausted, "pod", klog.KObj(pod), "device", dev.ID, "count", dev.Count, "used", dev.Used)
+			continue
+		}
+		if k.Coresreq > 100 {
+			klog.ErrorS(nil, "core limit can't exceed 100", "pod", klog.KObj(pod), "device", dev.ID)
+			k.Coresreq = 100
+			//return false, tmpDevs
+		}
+		if k.Memreq > 0 {
+			memreq = k.Memreq
+		}
+		if k.MemPercentagereq != 101 && k.Memreq == 0 {
+			//This incurs an issue
+			memreq = dev.Totalmem * k.MemPercentagereq / 100
+		}
+		if dev.Totalmem-dev.Usedmem < memreq {
+			reason[common.CardInsufficientMemory]++
+			klog.V(5).InfoS(common.CardInsufficientMemory, "pod", klog.KObj(pod), "device", dev.ID, "device index", i, "device total memory", dev.Totalmem, "device used memory", dev.Usedmem, "request memory", memreq)
+			continue
+		}
+		if dev.Totalcore-dev.Usedcores < k.Coresreq {
+			reason[common.CardInsufficientCore]++
+			klog.V(5).InfoS(common.CardInsufficientCore, "pod", klog.KObj(pod), "device", dev.ID, "device index", i, "device total core", dev.Totalcore, "device used core", dev.Usedcores, "request cores", k.Coresreq)
+			continue
+		}
+		// Coresreq=100 indicates it want this card exclusively
+		if dev.Totalcore == 100 && k.Coresreq == 100 && dev.Used > 0 {
+			reason[common.ExclusiveDeviceAllocateConflict]++
+			klog.V(5).InfoS(common.ExclusiveDeviceAllocateConflict, "pod", klog.KObj(pod), "device", dev.ID, "device index", i, "used", dev.Used)
+			continue
+		}
+		// You can't allocate core=0 job to an already full GPU
+		if dev.Totalcore != 0 && dev.Usedcores == dev.Totalcore && k.Coresreq == 0 {
+			reason[common.CardComputeUnitsExhausted]++
+			klog.V(5).InfoS(common.CardComputeUnitsExhausted, "pod", klog.KObj(pod), "device", dev.ID, "device index", i)
+			continue
+		}
+
+		if k.Nums > 0 {
+			klog.V(5).InfoS("find fit device", "pod", klog.KObj(pod), "device", dev.ID)
+			k.Nums--
+			tmpDevs[k.Type] = append(tmpDevs[k.Type], util.ContainerDevice{
+				Idx:        int(dev.Index),
+				UUID:       dev.ID,
+				Type:       k.Type,
+				Usedmem:    memreq,
+				Usedcores:  k.Coresreq,
+				CustomInfo: maps.Clone(dev.CustomInfo),
+			})
+		}
+		if k.Nums == 0 {
+			klog.V(4).InfoS("device allocate success", "pod", klog.KObj(pod), "allocate device", tmpDevs)
+			return true, tmpDevs, ""
+		}
+	}
+	if len(tmpDevs) > 0 {
+		reason[common.AllocatedCardsInsufficientRequest] = len(tmpDevs)
+		klog.V(5).InfoS(common.AllocatedCardsInsufficientRequest, "pod", klog.KObj(pod), "request", originReq, "allocated", len(tmpDevs))
+	}
+	return false, tmpDevs, common.GenReason(reason, len(devices))
+}
+
+func (sdev *MetaxSDevices) getMetaxSDevices(n corev1.Node) ([]*MetaxSDeviceInfo, error) {
+	anno, ok := n.Annotations[MetaxSDeviceAnno]
+	if !ok {
+		return []*MetaxSDeviceInfo{}, errors.New("annos not found " + MetaxSDeviceAnno)
+	}
+
+	metaxSDevices := []*MetaxSDeviceInfo{}
+	err := json.Unmarshal([]byte(anno), &metaxSDevices)
+	if err != nil {
+		klog.ErrorS(err, "failed to unmarshal metax sdevices", "node", n.Name, "sdevice annotation", anno)
+		return []*MetaxSDeviceInfo{}, err
+	}
+
+	if len(metaxSDevices) == 0 {
+		klog.InfoS("no metax sgpu device found", "node", n.Name, "sdevice annotation", anno)
+		return []*MetaxSDeviceInfo{}, errors.New("no sdevice found on node")
+	}
+
+	klog.V(5).Infof("node[%s] metax sdevice information: %s", n.Name, NodeMetaxSDeviceInfo(metaxSDevices).String())
+	return metaxSDevices, nil
+}
+
+func (sdev *MetaxSDevices) checkDeviceQos(reqQos string, usage util.DeviceUsage, request util.ContainerDeviceRequest) bool {
+	if usage.Used == 0 {
+		klog.Infof("device[%s] not use, it can switch to any qos", usage.ID)
+		return true
+	}
+
+	if request.Coresreq == 100 {
+		klog.Infoln("request exclusive device, no need verify qos")
+		return true
+	}
+
+	devQos := ""
+	if qos, ok := sdev.jqCache.Get(usage.ID); ok {
+		devQos = qos
+	} else {
+		if value, ok := usage.CustomInfo["QosPolicy"]; ok {
+			if qos, ok := value.(string); ok {
+				devQos = qos
+			}
+		}
+	}
+
+	klog.Infof("device[%s]: devQos [%s], reqQos [%s]", usage.ID, devQos, reqQos)
+	if devQos == "" || reqQos == devQos {
+		return true
+	} else {
+		return false
+	}
+}
+
+func (sdev *MetaxSDevices) addJitteryQos(reqQos string, devs util.PodSingleDevice) {
+	for _, ctrdev := range devs {
+		for _, dev := range ctrdev {
+			if value, ok := dev.CustomInfo["QosPolicy"]; ok {
+				if currentQos, ok := value.(string); ok {
+					expectedQos := reqQos
+					if dev.Usedcores == 100 {
+						expectedQos = ""
+					}
+
+					if currentQos != expectedQos {
+						sdev.jqCache.Add(dev.UUID, expectedQos)
+						klog.Infof("device[%s] add to cache, expectedQos[%s] not equal to currentQos[%s]",
+							dev.UUID, expectedQos, currentQos)
+					}
+				}
+			}
+		}
+	}
 }
