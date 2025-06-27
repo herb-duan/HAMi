@@ -29,6 +29,7 @@ import (
 
 	"github.com/Project-HAMi/HAMi/pkg/device"
 	"github.com/Project-HAMi/HAMi/pkg/device/hygon"
+	"github.com/Project-HAMi/HAMi/pkg/device/kunlun"
 	"github.com/Project-HAMi/HAMi/pkg/device/metax"
 	"github.com/Project-HAMi/HAMi/pkg/device/nvidia"
 	"github.com/Project-HAMi/HAMi/pkg/scheduler/policy"
@@ -1471,6 +1472,214 @@ func Test_calcScore(t *testing.T) {
 				err: nil,
 			},
 		},
+		{
+			name: "one node one device one pod one container use one device for kunlun.",
+			args: struct {
+				nodes *map[string]*NodeUsage
+				nums  util.PodDeviceRequests
+				annos map[string]string
+				task  *corev1.Pod
+			}{
+				nodes: &map[string]*NodeUsage{
+					"node1": {
+						Node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}},
+						Devices: policy.DeviceUsageList{
+							Policy: util.GPUSchedulerPolicySpread.String(),
+							DeviceLists: []*policy.DeviceListsScore{
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid1",
+										Index:     0,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid2",
+										Index:     1,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid3",
+										Index:     2,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid4",
+										Index:     3,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid5",
+										Index:     4,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid6",
+										Index:     5,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid7",
+										Index:     6,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+								{
+									Device: &util.DeviceUsage{
+										ID:        "uuid8",
+										Index:     7,
+										Used:      0,
+										Count:     1,
+										Usedmem:   0,
+										Totalmem:  98304, // not enough mem
+										Totalcore: 100,
+										Usedcores: 0,
+										Numa:      0,
+										Type:      kunlun.KunlunGPUDevice,
+										Health:    true,
+									},
+									Score: 0,
+								},
+							},
+						},
+					},
+				},
+				nums: util.PodDeviceRequests{
+					{
+						"hami.io/vgpu-devices-to-allocate": util.ContainerDeviceRequest{
+							Nums:     1,
+							Type:     kunlun.KunlunGPUDevice,
+							Memreq:   0,
+							Coresreq: 0,
+						},
+					},
+				},
+				annos: make(map[string]string),
+				task: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test1",
+					},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "xpu",
+								Image: "chrstnhntschl/xpu_burn",
+								Args:  []string{"6000"},
+								Resources: corev1.ResourceRequirements{
+									Limits: corev1.ResourceList{
+										"kunlunxin.com/xpu": *resource.NewQuantity(1, resource.BinarySI),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wants: struct {
+				want        *policy.NodeScoreList
+				failedNodes map[string]string
+				err         error
+			}{
+				want: &policy.NodeScoreList{
+					Policy: util.NodeSchedulerPolicyBinpack.String(),
+					NodeList: []*policy.NodeScore{
+						{
+							NodeID: "node1",
+							Devices: util.PodDevices{
+								"kunlun": util.PodSingleDevice{
+									{
+										{
+											Idx:       0,
+											UUID:      "uuid1",
+											Type:      kunlun.KunlunGPUDevice,
+											Usedcores: 100,
+											Usedmem:   98304,
+										},
+									},
+								},
+							},
+							Score: 2000,
+						},
+					},
+				},
+				failedNodes: map[string]string{},
+				err:         nil,
+			},
+		},
 	}
 	s := NewScheduler()
 	for _, test := range tests {
@@ -1496,121 +1705,6 @@ func Test_calcScore(t *testing.T) {
 				assert.DeepEqual(t, wantI.Devices, gotI.Devices)
 				assert.DeepEqual(t, wantI.Score, gotI.Score)
 			}
-		})
-	}
-}
-
-func Test_checkType(t *testing.T) {
-	tests := []struct {
-		name string
-		args struct {
-			annos map[string]string
-			d     util.DeviceUsage
-			n     util.ContainerDeviceRequest
-		}
-		want1 bool
-	}{
-		{
-			name: "device type the same as node type",
-			args: struct {
-				annos map[string]string
-				d     util.DeviceUsage
-				n     util.ContainerDeviceRequest
-			}{
-				annos: map[string]string{},
-				d: util.DeviceUsage{
-					Type: nvidia.NvidiaGPUDevice,
-				},
-				n: util.ContainerDeviceRequest{
-					Type: nvidia.NvidiaGPUDevice,
-				},
-			},
-			want1: true,
-		},
-		{
-			name: "device type the different from node type",
-			args: struct {
-				annos map[string]string
-				d     util.DeviceUsage
-				n     util.ContainerDeviceRequest
-			}{
-				annos: map[string]string{},
-				d: util.DeviceUsage{
-					Type: nvidia.NvidiaGPUDevice,
-				},
-				n: util.ContainerDeviceRequest{
-					Type: metax.MetaxGPUDevice,
-				},
-			},
-			want1: false,
-		},
-		{
-			name: "don't set to device type and node type",
-			args: struct {
-				annos map[string]string
-				d     util.DeviceUsage
-				n     util.ContainerDeviceRequest
-			}{
-				annos: map[string]string{},
-				d:     util.DeviceUsage{},
-				n:     util.ContainerDeviceRequest{},
-			},
-			want1: false,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result1, _ := checkType(test.args.annos, test.args.d, test.args.n)
-			assert.DeepEqual(t, result1, test.want1)
-		})
-	}
-}
-
-func Test_checkUUID(t *testing.T) {
-	tests := []struct {
-		name string
-		args struct {
-			annos map[string]string
-			d     util.DeviceUsage
-			n     util.ContainerDeviceRequest
-		}
-		want bool
-	}{
-		{
-			name: "device the same as node",
-			args: struct {
-				annos map[string]string
-				d     util.DeviceUsage
-				n     util.ContainerDeviceRequest
-			}{
-				annos: map[string]string{},
-				d: util.DeviceUsage{
-					Type: nvidia.NvidiaGPUDevice,
-				},
-				n: util.ContainerDeviceRequest{
-					Type: nvidia.NvidiaGPUDevice,
-				},
-			},
-			want: true,
-		},
-		{
-			name: "don't set to type",
-			args: struct {
-				annos map[string]string
-				d     util.DeviceUsage
-				n     util.ContainerDeviceRequest
-			}{
-				annos: map[string]string{},
-				d:     util.DeviceUsage{},
-				n:     util.ContainerDeviceRequest{},
-			},
-			want: false,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := checkUUID(test.args.annos, test.args.d, test.args.n)
-			assert.DeepEqual(t, result, test.want)
 		})
 	}
 }
@@ -2146,13 +2240,16 @@ func Test_fitInCertainDevice(t *testing.T) {
 			},
 			want1: false,
 			want2: map[string]util.ContainerDevices{},
-			want3: map[string]int{cardTypeMismatch: 2, cardUUIDMismatch: 3, cardTimeSlicingExhausted: 4,
+			want3: map[string]int{cardUUIDMismatch: 3, cardTimeSlicingExhausted: 4,
 				cardInsufficientMemory: 2, cardInsufficientCore: 1},
 		},
 	}
 	for _, test := range tests {
+
 		t.Run(test.name, func(t *testing.T) {
-			result1, result2, result3 := fitInCertainDevice(test.args.node, test.args.request, test.args.annos, test.args.pod, test.args.allocated)
+			gpuDevices := &nvidia.NvidiaGPUDevices{}
+
+			result1, result2, result3 := gpuDevices.Fit(getNodeResources(*test.args.node, nvidia.NvidiaGPUDevice), test.args.request, test.args.annos, test.args.pod, test.args.allocated)
 			assert.DeepEqual(t, result1, test.want1)
 			assert.DeepEqual(t, result2, test.want2)
 			assert.DeepEqual(t, convertReasonToMap(result3), test.want3)
@@ -2360,7 +2457,7 @@ func Test_fitInDevices(t *testing.T) {
 				devinput: &util.PodDevices{},
 			},
 			want1: false,
-			want2: "1/1 CardTypeMismatch",
+			want2: "Device type not found",
 		},
 	}
 	for _, test := range tests {
