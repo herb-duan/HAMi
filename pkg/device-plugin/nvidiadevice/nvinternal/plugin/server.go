@@ -229,16 +229,7 @@ func (plugin *NvidiaDevicePlugin) cleanup() {
 
 // Devices returns the full set of devices associated with the plugin.
 func (plugin *NvidiaDevicePlugin) Devices() rm.Devices {
-	devs := plugin.rm.Devices()
-	ret := make(rm.Devices)
-	for id, dev := range devs {
-		if nvidia.FilterDeviceToRegister(dev.ID, dev.Index) {
-			klog.V(5).InfoS("Filtering device", "device", dev.ID)
-			continue
-		}
-		ret[id] = dev
-	}
-	return ret
+	return plugin.rm.Devices()
 }
 
 // Start starts the gRPC server, registers the device plugin with the Kubelet,
